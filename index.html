@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Block state → interface behavior</title>
+<meta name="description" content="Case study: how published shared-block state derives prompt-editor interface behavior." />
+<!--
+  STANDALONE / PORTABLE build of the /demos/block-states prototype.
+  Single self-contained file — no framework, no build step, no Kochi imports, no
+  external JS. Host anywhere (static host, S3, GitHub Pages) or paste into a
+  Framer HTML embed. Nothing here sets X-Frame-Options, so it embeds cross-origin.
+
+  Faithfulness: every product colour, icon SVG, font, and string was extracted
+  from the live Kochi app (dark theme) so this matches the in-app prototype. The
+  surrounding "canvas" (lavender gradient, violet ink) is the case study's own
+  identity. The required beat's "Keep current version" line is an idealised
+  depiction (not shipped copy) — see the in-app prototype's notes.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* Kochi product tokens (dark theme) — extracted from the live app */
+    --bg-primary:#0C111D; --bg-secondary:#161B26; --bg-tertiary:#1F242F;
+    --border-primary:#333741;
+    --text-primary:#F5F5F6; --text-secondary:#CECFD2; --text-tertiary:#94969C;
+    --fg-quinary:#85888E;
+    --blue-500:#2E90FA; --warning-500:#F79009; --error-500:#EF4444; --success-500:#17B26A;
+    --btn-bg:#0086C9; --btn-text:#FFFFFF; --btn-border:rgba(255,255,255,0.12);
+    --disabled-bg:#1F242F; --disabled-text:#85888E; --disabled-border:#333741;
+    --scrim:rgba(245,245,246,0.30);
+
+    /* Case-study canvas identity */
+    --ink:#1d1b2e; --ink-soft:#4a4860; --ink-muted:#8d8aa3;
+    --violet:#6938ef; --violet-ghost:rgba(105,56,239,0.16);
+    --hairline:rgba(29,27,46,0.10); --card-border:rgba(29,27,46,0.07);
+
+    --ui:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+    --mono:'JetBrains Mono','IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; }
+  body { font-family:var(--ui); -webkit-font-smoothing:antialiased; }
+
+  .canvas {
+    position:relative; min-height:100vh; width:100%;
+    background:
+      radial-gradient(120% 80% at 85% 0%, rgba(170,150,235,0.30), transparent 55%),
+      linear-gradient(160deg,#f5f3fb 0%,#ecebf6 55%,#e7e5f1 100%);
+  }
+  .grid {
+    position:absolute; inset:0; pointer-events:none;
+    background-image:
+      linear-gradient(rgba(29,27,46,0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(29,27,46,0.045) 1px, transparent 1px);
+    background-size:44px 44px;
+  }
+  .container {
+    position:relative; margin:0 auto; max-width:920px;
+    display:flex; flex-direction:column; justify-content:flex-start; gap:28px;
+    padding:40px 24px; min-height:100vh;
+  }
+
+  /* Header */
+  header { display:flex; flex-direction:column; gap:20px; }
+  .head-row { display:flex; align-items:baseline; justify-content:space-between; gap:16px; }
+  h1 { margin:0; font-size:18px; font-weight:600; letter-spacing:-0.01em; color:var(--ink); }
+  .pausebtn {
+    display:inline-flex; align-items:center; gap:6px; border-radius:9999px;
+    background:rgba(255,255,255,0.8); padding:6px 12px; font-size:12px; font-weight:500;
+    color:var(--ink-soft); border:1px solid var(--card-border); cursor:pointer;
+    box-shadow:0 1px 2px rgba(16,24,40,0.05); font-family:var(--ui);
+  }
+  .pausebtn svg { width:14px; height:14px; }
+
+  .track { display:flex; align-items:center; gap:12px; }
+  .track-item {
+    position:relative; flex:0 0 auto; padding-bottom:6px; font-size:12px; font-weight:500;
+    color:var(--ink-muted); background:none; border:none; cursor:pointer; font-family:var(--ui);
+    white-space:nowrap; transition:color .15s ease;
+  }
+  .track-item.active { color:var(--ink); }
+  .cd { position:absolute; left:0; right:0; bottom:0; height:2px; border-radius:9999px;
+        overflow:hidden; background:var(--violet-ghost); display:none; }
+  .track-item.active .cd { display:block; }
+  .cd-fill { display:block; height:100%; width:100%; border-radius:9999px;
+             background:var(--violet); transform:scaleX(1); transform-origin:left; }
+  .track-conn { height:1px; width:24px; flex:0 0 auto; background:var(--hairline); }
+
+  .desc { display:flex; flex-direction:column; min-height:64px; }
+  .desc p { margin:0; font-size:14px; line-height:1.6; color:var(--ink-soft); }
+
+  /* Frame */
+  .frame-wrap { position:relative; }
+  .frame {
+    position:relative; overflow:hidden; border-radius:12px;
+    background:var(--bg-primary); border:1px solid var(--card-border);
+    box-shadow:0 24px 60px -28px rgba(29,27,46,0.30), 0 6px 18px -12px rgba(29,27,46,0.18);
+  }
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+    padding:10px 16px; border-bottom:1px solid var(--border-primary);
+  }
+  .topbar-left { display:flex; align-items:center; gap:12px; }
+  .prompt-name { font-size:14px; font-weight:500; color:var(--text-secondary); }
+  .save { display:inline-flex; align-items:center; justify-content:center; height:32px; width:25px;
+          color:var(--fg-quinary); }
+  .publish {
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
+    height:40px; padding:8px 12px; font-size:14px; font-weight:500; border-radius:10px;
+    border:1px solid var(--btn-border); background:var(--btn-bg); color:var(--btn-text);
+    font-family:var(--ui); cursor:pointer; transition:filter .15s ease;
+  }
+  .publish svg { width:20px; height:20px; }
+  .publish[disabled] {
+    background:var(--disabled-bg); color:var(--disabled-text); border-color:var(--disabled-border);
+    cursor:not-allowed;
+  }
+
+  .body-rel { position:relative; }
+  .editor {
+    padding:20px; font-family:var(--mono); font-size:13px; line-height:1.7; color:var(--text-primary);
+  }
+  .eline { color:var(--text-primary); }
+  .spacer { height:12px; }
+
+  /* Block boundary */
+  .block { border-radius:4px; transition:background-color .15s ease; }
+  .block.washed { background:var(--bg-secondary); }
+  .btagline, .bcontent { position:relative; padding-inline-start:12px; }
+  .bcontent { color:var(--text-primary); }
+  .brail { position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--border-primary); }
+  .btagtxt {
+    color:var(--text-tertiary); background:var(--bg-tertiary); padding:2px 6px;
+    border-radius:4px; text-transform:lowercase; user-select:none;
+  }
+  .bdot { position:absolute; left:-22px; top:50%; transform:translateY(-50%);
+          width:6px; height:6px; border-radius:9999px; }
+
+  /* Deferred pulse callout (case-study annotation over the product dot) */
+  .dot-callout {
+    position:absolute; width:14px; height:14px; border-radius:9999px;
+    border:2px solid var(--violet); pointer-events:none; display:none; z-index:20;
+    animation:ping 1.4s cubic-bezier(0,0,0.2,1) infinite;
+  }
+  @keyframes ping { 75%,100% { transform:scale(2); opacity:0; } }
+
+  /* Modal */
+  .scrim {
+    position:absolute; inset:0; z-index:10; display:flex; align-items:center; justify-content:center;
+    padding:16px; background:var(--scrim);
+  }
+  .modal {
+    display:flex; flex-direction:column; width:100%; max-height:100%; overflow:hidden;
+    border-radius:12px; background:var(--bg-secondary); border:1px solid var(--border-primary);
+    box-shadow:0 20px 25px -5px rgba(0,0,0,0.3);
+  }
+  .modal-head {
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+    padding:12px 16px; border-bottom:1px solid var(--border-primary);
+  }
+  .modal-head-left { display:flex; min-width:0; align-items:center; gap:12px; }
+  .modal-head-left svg { width:20px; height:20px; flex:0 0 auto; }
+  .modal-title { margin:0; font-size:16px; font-weight:500; color:var(--text-primary);
+                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .modal-x { color:var(--text-secondary); padding:4px; display:inline-flex; }
+  .modal-x svg { width:20px; height:20px; }
+  .modal-body { min-height:0; flex:1; overflow-y:auto; padding:24px 32px; }
+  .modal-body > * + * { margin-top:24px; }
+  .modal-lead { margin:0; font-size:16px; color:var(--text-secondary); }
+  .modal-lead strong { color:var(--text-primary); font-weight:600; }
+  .modal-note { margin:0; font-size:14px; color:var(--text-secondary); }
+  .diff { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+  .diff-h { margin:0 0 12px; font-size:14px; color:var(--text-primary); }
+  .diff-box {
+    border-radius:2px; padding:12px; background:var(--bg-primary);
+    font-family:var(--mono); font-size:13px; line-height:1.7; color:var(--text-secondary);
+  }
+  .diff-box.cur { border-left:2px solid var(--error-500); }
+  .diff-box.new { border-left:2px solid var(--success-500); }
+  .modal-foot {
+    display:flex; flex:0 0 auto; justify-content:flex-end; gap:12px;
+    padding:16px 32px; border-top:1px solid var(--border-primary);
+  }
+  .mbtn {
+    height:40px; padding:8px 16px; font-size:14px; font-weight:500; border-radius:8px;
+    font-family:var(--ui); cursor:default;
+  }
+  .mbtn.secondary { background:var(--bg-primary); border:1px solid var(--border-primary); color:var(--disabled-text); }
+  .mbtn.primary { background:var(--bg-tertiary); border:1px solid transparent; color:var(--disabled-text); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot-callout { animation:none; }
+    .track-item, .block { transition:none; }
+  }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="grid" aria-hidden="true"></div>
+    <div class="container">
+      <header>
+        <div class="head-row">
+          <h1>Block state → interface behavior</h1>
+          <button class="pausebtn" id="toggle" aria-pressed="false"></button>
+        </div>
+        <nav class="track" id="track" aria-label="Block lifecycle states"></nav>
+        <div class="desc"><p id="desc"></p></div>
+      </header>
+
+      <div class="frame-wrap" id="frameWrap">
+        <div class="frame">
+          <div class="topbar">
+            <div class="topbar-left">
+              <span class="prompt-name">northwind-support</span>
+              <span class="save" id="save" title="Changes saved" aria-label="Changes saved"></span>
+            </div>
+            <span id="pubWrap"><button class="publish" id="publish"></button></span>
+          </div>
+          <div class="body-rel">
+            <div class="editor" id="editor"></div>
+            <div id="modalLayer"></div>
+          </div>
+        </div>
+        <div class="dot-callout" id="dotCallout" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ── Icons (extracted from @untitledui/icons + Kochi's CloudCheck) ──────────
+  var ICON = {
+    cloudCheck:'<svg viewBox="0 0 20 20" fill="none" width="17" height="17"><path d="M5.41667 15.8333C3.3456 15.8333 1.66667 14.1544 1.66667 12.0833C1.66667 10.1303 3.1596 8.52607 5.06646 8.34946C5.45652 5.97677 7.51687 4.16666 10 4.16666C12.4831 4.16666 14.5435 5.97677 14.9336 8.34946C16.8404 8.52607 18.3333 10.1303 18.3333 12.0833C18.3333 14.1544 16.6544 15.8333 14.5833 15.8333C10.9251 15.8333 8.61942 15.8333 5.41667 15.8333Z" stroke="currentColor" stroke-width="1.66667" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.5 11.6667L9.16667 13.3333L12.5 10" stroke="currentColor" stroke-width="1.66667" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    upload:'<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v1.2c0 1.68 0 2.52-.327 3.162a3 3 0 0 1-1.311 1.311C18.72 21 17.88 21 16.2 21H7.8c-1.68 0-2.52 0-3.162-.327a3 3 0 0 1-1.311-1.311C3 18.72 3 17.88 3 16.2V15m14-7-5-5m0 0L7 8m5-5v12"/></svg>',
+    refresh:'<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10s-2.005-2.732-3.634-4.362a9 9 0 1 0 2.282 8.862M21 10V4m0 6h-6"/></svg>',
+    alert:'<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4m0 4h.01M10.615 3.892 2.39 18.098c-.456.788-.684 1.182-.65 1.506a1 1 0 0 0 .406.705c.263.191.718.191 1.629.191h16.45c.91 0 1.365 0 1.628-.191a1 1 0 0 0 .407-.705c.034-.324-.195-.718-.65-1.506L13.383 3.892c-.454-.785-.681-1.178-.978-1.31a1 1 0 0 0-.813 0c-.296.132-.523.525-.978 1.31Z"/></svg>',
+    xclose:'<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    play:'<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10Z"/><path d="M9.5 8.965c0-.477 0-.716.1-.849a.5.5 0 0 1 .364-.199c.166-.012.367.117.769.375l4.72 3.035c.349.224.523.336.583.478a.5.5 0 0 1 0 .39c-.06.142-.234.254-.583.478l-4.72 3.035c-.402.258-.603.387-.769.375a.5.5 0 0 1-.364-.2c-.1-.132-.1-.371-.1-.848v-6.07Z"/></svg>',
+    pause:'<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 15V9m5 6V9m7.5 3c0 5.523-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2s10 4.477 10 10Z"/></svg>'
+  };
+
+  // ── State model ────────────────────────────────────────────────────────────
+  var STATES = ['in-sync','optional','deferred','required'];
+  var HOLD = { 'in-sync':4600, 'optional':8000, 'deferred':6500, 'required':9500 };
+  var BLOCK_NAME = 'brand-voice';
+  var INTRO = 'You are a support agent for Northwind Bank.';
+  var OUTRO = 'Always close with a clear next step.';
+  var LOCAL = ['Use a warm, professional tone.', 'Avoid jargon and keep replies short.'];
+  var LIB = ['Use a warm, professional tone.', 'Avoid jargon, keep replies short, and lead with the answer before the explanation.'];
+  var V_CUR = 'v3', V_NEW = 'v4';
+
+  var CAP = {
+    'in-sync': { label:'In sync',
+      behavior:"This prompt uses the team's current shared block — nothing to review, and it's ready to publish." },
+    'optional': { label:'Optional update',
+      behavior:"The block's owner published a newer version and offered it. It's optional — take it now, or keep what you have." },
+    'deferred': { label:'Deferred',
+      behavior:"You skipped the optional update. A subtle marker keeps it flagged as available — nothing's blocked, your version stays as-is, and you can apply it whenever you want." },
+    'required': { label:'Required update',
+      behavior:"This one is required, not optional — the owner pushed it to every prompt, and it collided with your local edit. Publishing is blocked until you resolve it." }
+  };
+
+  var index = 0, paused = false, reducedMotion = false, anim = null;
+
+  var el = function(id){ return document.getElementById(id); };
+  var track = el('track'), desc = el('desc'), editor = el('editor'),
+      modalLayer = el('modalLayer'), publish = el('publish'), pubWrap = el('pubWrap'),
+      toggle = el('toggle'), save = el('save'), frameWrap = el('frameWrap'),
+      dotCallout = el('dotCallout');
+
+  save.innerHTML = ICON.cloudCheck;
+
+  function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // ── Build the (static) state track ─────────────────────────────────────────
+  STATES.forEach(function(s, i){
+    var b = document.createElement('button');
+    b.className = 'track-item';
+    b.type = 'button';
+    b.setAttribute('data-state', s);
+    b.innerHTML = esc(CAP[s].label) + '<span class="cd"><span class="cd-fill"></span></span>';
+    b.addEventListener('click', function(){ selectState(s); });
+    track.appendChild(b);
+    if (i < STATES.length - 1) {
+      var c = document.createElement('span');
+      c.className = 'track-conn';
+      track.appendChild(c);
+    }
+  });
+
+  // ── Block boundary markup ──────────────────────────────────────────────────
+  function blockHTML(showDot, conflict){
+    var dotTitle = conflict ? ('Conflict blocks publish for ' + BLOCK_NAME)
+                            : ('Update available for ' + BLOCK_NAME);
+    var dotColor = conflict ? 'var(--warning-500)' : 'var(--blue-500)';
+    var dot = showDot ? '<span class="bdot" title="' + dotTitle + '" style="background:' + dotColor + '"></span>' : '';
+    var tag = function(closing){
+      var txt = closing ? ('{{/block: ' + BLOCK_NAME + '}}') : ('{{block: ' + BLOCK_NAME + '}}');
+      return '<div class="btagline"><span class="brail"></span>' + (closing ? '' : dot) +
+             '<span class="btagtxt">' + esc(txt) + '</span></div>';
+    };
+    var lines = LOCAL.map(function(l){
+      return '<div class="bcontent"><span class="brail"></span>' + esc(l) + '</div>';
+    }).join('');
+    return '<div class="block' + (showDot ? ' washed' : '') + '">' + tag(false) + lines + tag(true) + '</div>';
+  }
+
+  // ── Modal markup ───────────────────────────────────────────────────────────
+  function modalHTML(conflict){
+    var headerIcon = conflict
+      ? '<span style="color:var(--warning-500)">' + ICON.alert + '</span>'
+      : '<span style="color:var(--blue-500)">' + ICON.refresh + '</span>';
+    var title = conflict ? 'Block conflict' : 'Block update available';
+    var lead = conflict
+      ? 'Publishing is blocked until you resolve the conflict for <strong>{{block:' + BLOCK_NAME + '}}</strong>'
+      : 'There is a newer version of <strong>{{block:' + BLOCK_NAME + '}}</strong>';
+    var note = conflict
+      ? '<p class="modal-note">Keep current version keeps your local block content — you can keep editing, but you can’t publish this prompt until you resolve the change.</p>'
+      : '';
+    var box = function(cls, lines){
+      return '<div class="diff-box ' + cls + '">' + lines.map(function(l){ return esc(l); }).join('<br>') + '</div>';
+    };
+    var diff =
+      '<div class="diff">' +
+        '<div><p class="diff-h">' + V_CUR + ' (current)</p>' + box('cur', LOCAL) + '</div>' +
+        '<div><p class="diff-h">' + V_NEW + ' (new)</p>' + box('new', LIB) + '</div>' +
+      '</div>';
+    var secondary = conflict ? 'Keep current version' : 'Skip';
+    return (
+      '<div class="scrim" aria-hidden="true">' +
+        '<div class="modal" style="max-width:none">' +
+          '<div class="modal-head">' +
+            '<div class="modal-head-left">' + headerIcon +
+              '<h3 class="modal-title">' + title + '</h3></div>' +
+            '<span class="modal-x">' + ICON.xclose + '</span>' +
+          '</div>' +
+          '<div class="modal-body">' +
+            '<p class="modal-lead">' + lead + '</p>' +
+            note +
+            diff +
+          '</div>' +
+          '<div class="modal-foot">' +
+            '<button class="mbtn secondary">' + secondary + '</button>' +
+            '<button class="mbtn primary">Update</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  // ── Render the frame for a given state ─────────────────────────────────────
+  function renderFrame(state){
+    var conflict = state === 'required';
+    var hasUpdate = state === 'optional' || state === 'deferred';
+    var modal = state === 'optional' || state === 'required';
+    var showDot = hasUpdate || conflict;
+
+    // Publish button
+    publish.innerHTML = ICON.upload + 'Publish';
+    publish.disabled = conflict;
+    pubWrap.setAttribute('title', conflict ? 'Resolve block conflicts to publish' : '');
+
+    // Editor body
+    editor.style.minHeight = (modal ? 560 : 230) + 'px';
+    editor.innerHTML =
+      '<div class="eline">' + esc(INTRO) + '</div>' +
+      '<div class="spacer"></div>' +
+      blockHTML(showDot, conflict) +
+      '<div class="spacer"></div>' +
+      '<div class="eline">' + esc(OUTRO) + '</div>';
+
+    // Modal
+    modalLayer.innerHTML = modal ? modalHTML(conflict) : '';
+
+    // Deferred pulse callout — position over the product dot (measured)
+    if (state === 'deferred') {
+      var dotEl = editor.querySelector('.bdot');
+      if (dotEl) {
+        var wr = frameWrap.getBoundingClientRect();
+        var dr = dotEl.getBoundingClientRect();
+        dotCallout.style.left = (dr.left - wr.left + dr.width / 2 - 7) + 'px';
+        dotCallout.style.top  = (dr.top - wr.top + dr.height / 2 - 7) + 'px';
+        dotCallout.style.display = 'block';
+      }
+    } else {
+      dotCallout.style.display = 'none';
+    }
+  }
+
+  // ── Countdown underline (drives the advance) ───────────────────────────────
+  function startCountdown(state){
+    if (anim) { anim.onfinish = null; anim.cancel(); anim = null; }
+    var fill = track.querySelector('.track-item.active .cd-fill');
+    if (!fill) return;
+    if (paused) return; // hold full
+    anim = fill.animate(
+      [{ transform:'scaleX(0)' }, { transform:'scaleX(1)' }],
+      { duration: HOLD[state], easing:'linear', fill:'forwards' }
+    );
+    anim.onfinish = function(){ index = (index + 1) % STATES.length; render(); };
+  }
+
+  // ── Master render ──────────────────────────────────────────────────────────
+  function render(){
+    var state = STATES[index];
+    // track active
+    [].forEach.call(track.querySelectorAll('.track-item'), function(b){
+      b.classList.toggle('active', b.getAttribute('data-state') === state);
+      b.setAttribute('aria-current', b.getAttribute('data-state') === state ? 'step' : 'false');
+    });
+    // description
+    desc.textContent = CAP[state].behavior;
+    // frame
+    renderFrame(state);
+    // toggle button
+    toggle.innerHTML = (paused ? ICON.play : ICON.pause) + (paused ? 'Play' : 'Pause');
+    toggle.setAttribute('aria-pressed', paused ? 'true' : 'false');
+    toggle.setAttribute('aria-label', paused ? 'Resume auto-cycling' : 'Pause auto-cycling');
+    // countdown
+    startCountdown(state);
+  }
+
+  function selectState(s){ index = STATES.indexOf(s); paused = true; render(); }
+
+  toggle.addEventListener('click', function(){ paused = !paused; render(); });
+
+  // prefers-reduced-motion: hold statically on the required climax
+  try {
+    var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    var applyMq = function(){
+      reducedMotion = mq.matches;
+      if (mq.matches) { paused = true; index = STATES.indexOf('required'); render(); }
+    };
+    if (mq.addEventListener) mq.addEventListener('change', applyMq); else mq.addListener(applyMq);
+    reducedMotion = mq.matches;
+    if (mq.matches) { paused = true; index = STATES.indexOf('required'); }
+  } catch (e) { /* no-op */ }
+
+  render();
+})();
+</script>
+</body>
+</html>
