@@ -8,11 +8,16 @@ to each state.
 It's a single static file (`index.html`) — no build, no dependencies, no
 framework. Open it directly, or host it anywhere.
 
-## Live demo
+## Live demos
 
 Served via GitHub Pages:
 
-> `https://bwernet.github.io/kochi-block-states/`
+- **Block lifecycle** — one shared block through its states:
+  `https://bwernet.github.io/kochi-block-states/`
+- **Editor + Cowork (conclusion)** — the whole product, resolving a shared-block update:
+  `https://bwernet.github.io/kochi-block-states/editor-chrome/`
+
+Each is a single static file (`index.html` / `editor-chrome/index.html`) — no build, no dependencies.
 
 ## Embedding (e.g. Framer)
 

@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Composing shared AI behavior — Kochi</title>
+<meta name="description" content="Case study conclusion: the prompt editor + Cowork, showing how shared-block state, ownership, and updates stay visible." />
+<!--
+  STANDALONE / PORTABLE conclusion piece for the block-states case study.
+  Single self-contained file — no framework, no build, no external JS. Host
+  anywhere or paste into a Framer HTML embed. Nothing sets X-Frame-Options.
+
+  The whole product in one view: a prompt composed of shared blocks (with
+  category, ownership, and update state), and the Cowork agent surfacing what
+  changed / who / what needs action. Auto-cycles the brand-voice update story
+  (out of sync → update available → modal → applied) and yields to interaction.
+  Faithful to Kochi's shipped dark UI; the lavender canvas + violet controls are
+  the case study's own identity. Idealised depiction, not 1:1 shipped chrome.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-primary:#0C111D; --bg-secondary:#161B26; --bg-tertiary:#1F242F;
+    --border-primary:#333741;
+    --text-primary:#F5F5F6; --text-secondary:#CECFD2; --text-tertiary:#94969C;
+    --fg-quinary:#85888E;
+    --blue-500:#2E90FA; --warning-500:#F79009; --error-500:#EF4444; --success-500:#17B26A;
+    --btn-bg:#0086C9; --btn-text:#FFFFFF; --btn-border:rgba(255,255,255,0.12);
+    --brand-purple:#8b5cf6;
+    --scrim:rgba(245,245,246,0.30);
+
+    --ink:#1d1b2e; --ink-soft:#4a4860; --ink-muted:#8d8aa3;
+    --violet:#6938ef; --violet-ghost:rgba(105,56,239,0.16); --hairline:rgba(29,27,46,0.10);
+    --card-border:rgba(29,27,46,0.07);
+
+    --ui:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+    --mono:'JetBrains Mono','IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; }
+  body { font-family:var(--ui); -webkit-font-smoothing:antialiased; }
+  button { font-family:inherit; cursor:pointer; }
+
+  .canvas {
+    position:relative; min-height:100vh; width:100%;
+    display:flex; align-items:center; justify-content:center;
+    background:
+      radial-gradient(120% 80% at 85% 0%, rgba(170,150,235,0.30), transparent 55%),
+      linear-gradient(160deg,#f5f3fb 0%,#ecebf6 55%,#e7e5f1 100%);
+  }
+  .grid {
+    position:absolute; inset:0; pointer-events:none;
+    background-image:
+      linear-gradient(rgba(29,27,46,0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(29,27,46,0.045) 1px, transparent 1px);
+    background-size:44px 44px;
+  }
+  .wrap { position:relative; width:100%; max-width:1120px; padding:40px 24px;
+          display:flex; flex-direction:column; gap:20px; }
+
+  /* Card */
+  .card {
+    position:relative; display:flex; flex-direction:column; overflow:hidden;
+    height:640px; border-radius:16px; background:var(--bg-primary);
+    border:1px solid var(--card-border);
+    box-shadow:0 24px 60px -28px rgba(29,27,46,0.30), 0 6px 18px -12px rgba(29,27,46,0.18);
+  }
+  .cols { display:flex; min-height:0; flex:1; }
+
+  /* Top bar */
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px;
+            padding:8px 12px; border-bottom:1px solid var(--border-primary); flex:0 0 auto; }
+  .tb-left { display:flex; min-width:0; align-items:center; gap:10px; }
+  .tb-title { font-size:14px; font-weight:600; color:var(--text-primary); white-space:nowrap; }
+  .tb-right { display:flex; align-items:center; gap:4px; }
+  .tb-icon { display:inline-flex; height:28px; width:28px; align-items:center; justify-content:center;
+             border-radius:6px; color:var(--fg-quinary); }
+  .tb-publish { margin-left:4px; display:inline-flex; height:28px; align-items:center; padding:0 12px;
+                border-radius:6px; font-size:12px; font-weight:500;
+                background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+
+  /* Blocks panel */
+  .blocks { display:flex; width:296px; flex:0 0 auto; flex-direction:column;
+            border-right:1px solid var(--border-primary); }
+  .search { margin:12px 12px 0; display:flex; align-items:center; gap:8px; border-radius:8px;
+            padding:8px 12px; background:var(--bg-tertiary); border:1px solid var(--border-primary);
+            color:var(--text-tertiary); font-size:14px; }
+  .blocks-scroll { display:flex; min-height:0; flex:1; flex-direction:column; gap:16px;
+                   overflow-y:auto; padding:12px; }
+  .section-head { display:flex; align-items:center; justify-content:space-between; padding:0 2px; margin-bottom:8px; }
+  .section-title { font-size:14px; font-weight:500; color:var(--text-primary); }
+  .section-count { font-size:12px; color:var(--text-tertiary); }
+  .bcard { display:flex; flex-direction:column; gap:10px; border-radius:12px; padding:12px;
+           background:var(--bg-secondary); border:1px solid var(--border-primary); margin-bottom:8px; }
+  .bcard.active { border-color:rgba(46,144,250,0.30); }
+  .bcard-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+  .bcard-name { font-size:14px; font-weight:600; color:var(--text-primary); }
+  .tag { flex:0 0 auto; border-radius:9999px; padding:2px 8px; font-size:12px; font-weight:500; }
+  .bcard-desc { font-size:12px; line-height:1.55; color:var(--text-tertiary); margin:0; }
+  .pill { display:inline-flex; width:fit-content; align-items:center; gap:6px; border-radius:9999px;
+          padding:4px 10px; font-size:12px; font-weight:500; border:none; }
+  .btn-add { display:inline-flex; width:fit-content; align-items:center; gap:6px; border-radius:6px;
+             padding:6px 10px; font-size:12px; font-weight:500; color:var(--text-secondary);
+             background:transparent; border:1px solid var(--border-primary); }
+
+  /* Composed prompt */
+  .prompt { min-width:0; flex:1; overflow-y:auto; padding:20px;
+            font-family:var(--mono); font-size:13px; line-height:1.7; color:var(--text-primary); }
+  .pblock { border-radius:4px; transition:background-color .15s ease; }
+  .pblock.active { background:var(--bg-secondary); }
+  .ptag, .pline { position:relative; padding-inline-start:12px; }
+  .pline { color:var(--text-primary); }
+  .prail { position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--border-primary); }
+  .ptagtxt { color:var(--text-tertiary); background:var(--bg-tertiary); padding:2px 6px; border-radius:4px;
+             text-transform:lowercase; user-select:none; }
+  .pdot-wrap { position:absolute; top:50%; left:-22px; transform:translateY(-50%); }
+  .pdot { display:block; width:6px; height:6px; border-radius:9999px; background:var(--blue-500); }
+  .pdot-ping { position:absolute; left:-3px; top:-3px; display:block; width:12px; height:12px;
+               border-radius:9999px; border:2px solid var(--blue-500); animation:ping 1.4s cubic-bezier(0,0,0.2,1) infinite; }
+
+  /* Agent panel */
+  .agent { display:flex; width:372px; flex:0 0 auto; flex-direction:column;
+           border-left:1px solid var(--border-primary); }
+  .tabs { display:flex; align-items:center; gap:6px; padding:10px 12px; }
+  .tab { border-radius:8px; padding:6px 12px; font-size:12px; font-weight:500;
+         color:var(--text-tertiary); border:1px solid transparent; }
+  .tab.active { color:var(--text-primary); background:var(--bg-tertiary); border-color:var(--border-primary); }
+  .tab-overflow { margin-left:auto; display:inline-flex; height:28px; width:28px; align-items:center;
+                  justify-content:center; color:var(--text-tertiary); }
+  .conv { display:flex; min-height:0; flex:1; flex-direction:column; gap:16px; overflow-y:auto; padding:8px 16px; }
+  .msg-user { align-self:stretch; border-radius:12px; padding:10px 12px; font-size:14px;
+              background:var(--bg-secondary); color:var(--text-secondary); }
+  .msg-user.action { align-self:flex-end; max-width:80%; border-bottom-right-radius:2px; background:var(--bg-tertiary); padding:8px 12px; }
+  .msg-asst { font-size:14px; line-height:1.55; color:var(--text-secondary); margin:0; }
+  .msg-asst strong { color:var(--text-primary); font-weight:600; }
+  .asst-group { display:flex; flex-direction:column; gap:12px; }
+  .asst-actions { display:flex; flex-wrap:wrap; gap:8px; }
+  .abtn { height:36px; padding:0 16px; border-radius:8px; font-size:14px; font-weight:500; }
+  .abtn-primary { background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border);
+                  display:inline-flex; align-items:center; gap:6px; }
+  .abtn-secondary { background:transparent; color:var(--blue-500); border:1px solid var(--blue-500); }
+  .composer { flex:0 0 auto; padding:0 12px 12px; }
+  .composer-box { display:flex; flex-direction:column; gap:8px; border-radius:12px; padding:10px 12px;
+                  background:var(--bg-secondary); border:1px solid var(--border-primary); }
+  .composer-hint { font-size:14px; color:var(--text-tertiary); }
+  .composer-row { display:flex; align-items:center; gap:8px; color:var(--text-tertiary); }
+  .ci { display:inline-flex; height:28px; width:28px; align-items:center; justify-content:center; }
+  .ask-pill { display:inline-flex; align-items:center; gap:4px; border-radius:6px; padding:4px 8px;
+              font-size:12px; font-weight:500; color:var(--text-secondary); border:1px solid var(--border-primary); }
+  .send { margin-left:auto; display:inline-flex; height:28px; width:28px; align-items:center;
+          justify-content:center; border-radius:9999px; background:var(--bg-tertiary); color:var(--text-secondary); }
+
+  /* Modal */
+  .scrim { position:absolute; inset:0; z-index:30; display:flex; align-items:center; justify-content:center;
+           padding:24px; background:var(--scrim); }
+  .modal { display:flex; width:100%; max-width:42rem; flex-direction:column; overflow:hidden;
+           border-radius:12px; background:var(--bg-secondary); border:1px solid var(--border-primary);
+           box-shadow:0 20px 25px -5px rgba(0,0,0,0.3); }
+  .modal-head { display:flex; align-items:center; justify-content:space-between; gap:16px;
+                padding:12px 16px; border-bottom:1px solid var(--border-primary); }
+  .modal-head-left { display:flex; align-items:center; gap:12px; }
+  .modal-title { margin:0; font-size:16px; font-weight:500; color:var(--text-primary); }
+  .modal-x { display:inline-flex; padding:4px; color:var(--text-secondary); background:none; border:none; }
+  .modal-body { padding:24px 32px; }
+  .modal-lead { margin:0; font-size:16px; color:var(--text-secondary); }
+  .modal-lead strong { color:var(--text-primary); }
+  .diff { margin-top:24px; display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+  .diff-h { margin:0 0 8px; font-size:14px; color:var(--text-primary); }
+  .diff-box { border-radius:2px; padding:12px; background:var(--bg-primary);
+              font-family:var(--mono); font-size:13px; line-height:1.7; color:var(--text-secondary); }
+  .modal-foot { display:flex; justify-content:flex-end; gap:12px; padding:16px 32px;
+                border-top:1px solid var(--border-primary); }
+  .mbtn { height:40px; padding:0 16px; border-radius:8px; font-size:14px; font-weight:500; }
+  .mbtn-secondary { background:transparent; color:var(--blue-500); border:1px solid var(--blue-500); }
+  .mbtn-primary { background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+
+  /* Control strip (below the shell) */
+  .strip { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  .moments { display:flex; align-items:center; gap:12px; }
+  .moment { position:relative; flex:0 0 auto; padding-bottom:6px; font-size:12px; font-weight:500;
+            color:var(--ink-muted); background:none; border:none; transition:color .15s ease; }
+  .moment.active { color:var(--ink); }
+  .moment-conn { height:1px; width:24px; flex:0 0 auto; background:var(--hairline); }
+  .cd { position:absolute; inset-inline:0; bottom:0; height:2px; border-radius:9999px; overflow:hidden;
+        background:var(--violet-ghost); }
+  .cd-fill { display:block; height:100%; width:100%; border-radius:9999px; background:var(--violet);
+             transform-origin:left; transform:scaleX(1); }
+  .toggle { display:inline-flex; align-items:center; gap:6px; border-radius:9999px; padding:6px 12px;
+            font-size:12px; font-weight:500; color:var(--ink-soft); background:rgba(255,255,255,0.8);
+            border:1px solid var(--card-border); box-shadow:0 1px 2px rgba(16,24,40,0.05); }
+
+  @keyframes ping { 75%,100% { transform:scale(2); opacity:0; } }
+  @keyframes pulse { 50% { opacity:0.5; } }
+  .pulse { animation:pulse 1.8s cubic-bezier(0.4,0,0.6,1) infinite; }
+  @media (prefers-reduced-motion: reduce) { .pulse, .pdot-ping { animation:none; } }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="grid" aria-hidden="true"></div>
+    <div class="wrap">
+      <div id="card" class="card"></div>
+      <div id="strip" class="strip"></div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  function rgba(hex, a){
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n>>16)&255}, ${(n>>8)&255}, ${n&255}, ${a})`;
+  }
+
+  // ── Icons (extracted from the live app) ───────────────────────────────────
+  const I = {
+    cloudCheck:'<svg viewBox="0 0 20 20" fill="none" width="18" height="18"><path d="M5.41667 15.8333C3.3456 15.8333 1.66667 14.1544 1.66667 12.0833C1.66667 10.1303 3.1596 8.52607 5.06646 8.34946C5.45652 5.97677 7.51687 4.16666 10 4.16666C12.4831 4.16666 14.5435 5.97677 14.9336 8.34946C16.8404 8.52607 18.3333 10.1303 18.3333 12.0833C18.3333 14.1544 16.6544 15.8333 14.5833 15.8333C10.9251 15.8333 8.61942 15.8333 5.41667 15.8333Z" stroke="currentColor" stroke-width="1.66667" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.5 11.6667L9.16667 13.3333L12.5 10" stroke="currentColor" stroke-width="1.66667" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    clock:svg('m22.7 13.5-2-2-2 2M21 12a9 9 0 1 1-1.245-4.57M12 7v5l3 2',16),
+    dots:svg('M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm0-7a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm0 14a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z',16),
+    search:svg('m21 21-4.35-4.35M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',16),
+    refresh:svg('M21 10s-2.005-2.732-3.634-4.362a9 9 0 1 0 2.282 8.862M21 10V4m0 6h-6',14),
+    plus:svg('M12 5v14m-7-7h14',14),
+    chevR:svg('m9 18 6-6-6-6',16),
+    chevD:svg('m6 9 6 6 6-6',12),
+    sliders:svg('M5 21v-6m0 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm0-8V3m7 18v-6m0-8V3m0 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm7 14v-4m0 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm0-8V3',16),
+    mic:svg('M19 10v2a7 7 0 0 1-7 7m-7-9v2a7 7 0 0 0 7 7m0 0v3m-4 0h8m-4-7a3 3 0 0 1-3-3V5a3 3 0 1 1 6 0v7a3 3 0 0 1-3 3Z',16),
+    arrowUp:svg('M12 19V5m0 0-7 7m7-7 7 7',16),
+    x:svg('M18 6 6 18M6 6l12 12',20),
+    pause:svg('M9.5 15V9m5 6V9m7.5 3c0 5.523-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2s10 4.477 10 10Z',14),
+    play:'<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10Z"/><path d="M9.5 8.965c0-.477 0-.716.1-.849a.5.5 0 0 1 .364-.199c.166-.012.367.117.769.375l4.72 3.035c.349.224.523.336.583.478a.5.5 0 0 1 0 .39c-.06.142-.234.254-.583.478l-4.72 3.035c-.402.258-.603.387-.769.375a.5.5 0 0 1-.364-.2c-.1-.132-.1-.371-.1-.848v-6.07Z"/></svg>',
+    check:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#17b26a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+    mark:'<svg width="40" height="18" viewBox="0 0 43 26" fill="none"><g clip-path="url(#m)"><path d="M1.14 33.67 21.84-2.5" stroke="#36BFFA" stroke-width="4" stroke-linecap="round"/><path d="M9.34 33.5 30.36-2" stroke="#9B8AFB" stroke-width="4" stroke-linecap="round"/><path d="M18.6 32.49 38.8-2.49" stroke="#47CD89" stroke-width="4" stroke-linecap="round"/></g><defs><clipPath id="m"><rect width="39.85" height="26" fill="#fff" transform="translate(2.58)"/></clipPath></defs></svg>',
+  };
+  function svg(d, size){
+    return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+  }
+
+  // ── Data ───────────────────────────────────────────────────────────────────
+  const MOMENTS = ['Out of sync', 'Update available', 'Modal', 'Change applied'];
+  const STEP_MODAL = 2, STEP_APPLIED = 3;
+  const DEMO_MS = 3400;
+
+  const BRAND_V3 = ['Use a warm, professional tone.', 'Avoid jargon and keep replies short.'];
+  const BRAND_V4 = ['Use a warm, professional tone.', 'Avoid jargon, keep replies short, and lead with the answer before the explanation.'];
+
+  const CAT = {
+    core:  { color:'#2E90FA', label:'Core' },
+    safety:{ color:'#F79009', label:'Safety' },
+    brand: { color:'#8b5cf6', label:'Brand' },
+  };
+  const ACTIVE = [
+    { key:'identity', name:'Identity', cat:'core', desc:'The identity your prompt responds with', content:['You are a support agent for Northwind Bank.'] },
+    { key:'security', name:'Security', cat:'safety', desc:'Security and safety rules', content:['Do not publish or export account data without human approval.'] },
+    { key:'brand-voice', name:'Brand voice', cat:'brand', desc:'How responses should sound', content:BRAND_V3, update:true },
+  ];
+  const AVAILABLE = [
+    { key:'formatting', name:'Formatting Rules', cat:'brand', desc:'How responses should be formatted' },
+    { key:'escalation', name:'Escalation policy', cat:'core', desc:'When to hand off to a human' },
+  ];
+  function displayedActive(applied){
+    return ACTIVE.map(b => b.key==='brand-voice' && applied ? Object.assign({}, b, { content:BRAND_V4, update:false }) : b);
+  }
+
+  // ── State ────────────────────────────────────────────────────────────────
+  const S = { step:0, paused:false, reduced:false };
+  let anim = null;
+
+  // ── HTML builders ──────────────────────────────────────────────────────────
+  function tag(cat){ const c = CAT[cat]; return `<span class="tag" style="color:${c.color};background:${rgba(c.color,0.15)};border:1px solid ${rgba(c.color,0.30)}">${c.label}</span>`; }
+
+  function blockCard(b, opts){
+    const head = `<div class="bcard-head"><span class="bcard-name">${b.name}</span>${tag(b.cat)}</div>`;
+    const desc = `<p class="bcard-desc">${b.desc}</p>`;
+    let action;
+    if (opts.available) {
+      action = `<button class="btn-add">${I.plus}Add to prompt</button>`;
+    } else if (b.update) {
+      action = `<button class="pill${opts.emphasize?' pulse':''}" data-act="open" style="color:var(--blue-500);background:${rgba('#2E90FA',0.15)}">${I.refresh}Update available</button>`;
+    } else {
+      action = `<span class="pill" style="color:var(--success-500);background:${rgba('#17B26A',0.15)}">${I.check}Added</span>`;
+    }
+    return `<div class="bcard${opts.active?' active':''}">${head}${desc}${action}</div>`;
+  }
+
+  function composedBlock(b, opts){
+    const dot = b.update
+      ? `<span class="pdot-wrap" title="Update available for ${b.key}">${opts.emphasize?'<span class="pdot-ping"></span>':''}<span class="pdot"></span></span>`
+      : '';
+    const open = `<div class="ptag"><span class="prail"></span>${dot}<span class="ptagtxt">{{block: ${b.key}}}</span></div>`;
+    const lines = b.content.map(l => `<div class="pline"><span class="prail"></span>${l}</div>`).join('');
+    const close = `<div class="ptag"><span class="prail"></span><span class="ptagtxt">{{/block: ${b.key}}}</span></div>`;
+    return `<div class="pblock${opts.active?' active':''}">${open}${lines}${close}</div>`;
+  }
+
+  function blocksPanel(blocks, highlight, emphasize){
+    const activeCards = blocks.map((b,i)=>blockCard(b,{active:i===highlight, emphasize})).join('');
+    const availCards = AVAILABLE.map(b=>blockCard(b,{available:true})).join('');
+    return `<div class="blocks">
+      <div class="search">${I.search}<span>Search blocks</span></div>
+      <div class="blocks-scroll">
+        <div><div class="section-head"><span class="section-title">Blocks Active in Prompt</span><span class="section-count">${blocks.length}</span></div>${activeCards}</div>
+        <div><div class="section-head"><span class="section-title">Available Blocks</span><span class="section-count">${AVAILABLE.length}</span></div>${availCards}</div>
+      </div>
+    </div>`;
+  }
+
+  function composedPrompt(blocks, highlight, emphasize){
+    const inner = blocks.map((b,i)=>`<div${i>0?' style="margin-top:12px"':''}>${composedBlock(b,{active:i===highlight, emphasize})}</div>`).join('');
+    return `<div class="prompt">${inner}</div>`;
+  }
+
+  function agentPanel(reviewed, applied){
+    const tabs = ['Prompt Agent','Test','LLM Config'].map((t,i)=>`<span class="tab${i===0?' active':''}">${t}</span>`).join('');
+    const headsUpBtns = reviewed ? '' : `<div class="asst-actions">
+        <button class="abtn abtn-primary" data-act="open">${I.refresh}Review changes</button>
+        <button class="abtn abtn-secondary">Keep yours</button>
+      </div>`;
+    const userAction = reviewed ? `<div class="msg-user action">Review changes</div>` : '';
+    const confirmation = applied ? `<p class="msg-asst"><strong>Brand voice</strong> is now on v4 — you're up to date. Nothing else needs review before you publish.</p>` : '';
+    return `<div class="agent">
+      <div class="tabs">${tabs}<span class="tab-overflow">${I.chevR}</span></div>
+      <div class="conv">
+        <div class="msg-user">Anything I should know before I publish?</div>
+        <div class="asst-group">
+          <p class="msg-asst">Heads up — <strong>Brand voice</strong> moved to v4. Mateo Reyes changed it 3 days ago; it's used in 4 prompts. Want to see what changed?</p>
+          ${headsUpBtns}
+        </div>
+        ${userAction}
+        ${confirmation}
+      </div>
+      <div class="composer"><div class="composer-box">
+        <span class="composer-hint">Ask Kochi</span>
+        <div class="composer-row">
+          <span class="ci">${I.plus}</span>
+          <span class="ci">${I.sliders}</span>
+          <span class="ask-pill">Ask ${I.chevD}</span>
+          <span class="ci send" style="margin-left:auto;background:none;width:28px">${I.mic}</span>
+          <span class="send">${I.arrowUp}</span>
+        </div>
+      </div></div>
+    </div>`;
+  }
+
+  function modal(){
+    const box = (h, lines, accent) => `<div><p class="diff-h">${h}</p><div class="diff-box" style="border-left:2px solid ${accent}">${lines.join('<br>')}</div></div>`;
+    return `<div class="scrim">
+      <div class="modal">
+        <div class="modal-head">
+          <div class="modal-head-left"><span style="color:var(--blue-500)">${I.refresh.replace('width="14" height="14"','width="20" height="20"')}</span><h3 class="modal-title">Block update available</h3></div>
+          <button class="modal-x" data-act="close">${I.x}</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-lead">There is a newer version of <strong>{{block:brand-voice}}</strong></p>
+          <div class="diff">${box('v3 (current)', BRAND_V3, 'var(--error-500)')}${box('v4 (new)', BRAND_V4, 'var(--success-500)')}</div>
+        </div>
+        <div class="modal-foot">
+          <button class="mbtn mbtn-secondary" data-act="close">Skip</button>
+          <button class="mbtn mbtn-primary" data-act="apply">Update</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function topBar(){
+    return `<div class="topbar">
+      <div class="tb-left">${I.mark}<span class="tb-title">northwind-support</span><span style="color:var(--fg-quinary);display:inline-flex">${I.cloudCheck}</span></div>
+      <div class="tb-right">
+        <span class="tb-icon">${I.clock}</span>
+        <span class="tb-icon">${I.dots}</span>
+        <span class="tb-publish">Publish</span>
+      </div>
+    </div>`;
+  }
+
+  function controlStrip(){
+    const moments = MOMENTS.map((m,i)=>{
+      const active = i===S.step;
+      const cd = active ? `<span class="cd"><span class="cd-fill" id="cdfill"></span></span>` : '';
+      const conn = i < MOMENTS.length-1 ? `<span class="moment-conn"></span>` : '';
+      return `<button class="moment${active?' active':''}" data-act="moment" data-i="${i}">${m}${cd}</button>${conn}`;
+    }).join('');
+    const icon = S.paused ? I.play : I.pause;
+    return `<nav class="moments" aria-label="Auto-cycle moments">${moments}</nav>
+      <button class="toggle" data-act="toggle">${icon}${S.paused?'Play':'Pause'}</button>`;
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  function render(){
+    const applied = S.step === STEP_APPLIED;
+    const modalOpen = S.step === STEP_MODAL;
+    const reviewed = S.step >= STEP_MODAL;
+    const emphasize = S.step === 1;
+    const blocks = displayedActive(applied);
+    const highlight = S.step < STEP_APPLIED ? blocks.findIndex(b=>b.key==='brand-voice') : -1;
+
+    document.getElementById('card').innerHTML =
+      topBar() +
+      `<div class="cols">${blocksPanel(blocks, highlight, emphasize)}${composedPrompt(blocks, highlight, emphasize)}${agentPanel(reviewed, applied)}</div>` +
+      (modalOpen ? modal() : '');
+
+    document.getElementById('strip').innerHTML = controlStrip();
+
+    startCountdown();
+  }
+
+  function startCountdown(){
+    if (anim) { anim.onfinish = null; anim.cancel(); anim = null; }
+    if (S.paused || S.reduced) return;
+    const fill = document.getElementById('cdfill');
+    if (!fill) return;
+    anim = fill.animate([{ transform:'scaleX(0)' }, { transform:'scaleX(1)' }],
+      { duration: DEMO_MS, easing:'linear', fill:'forwards' });
+    anim.onfinish = () => { S.step = (S.step + 1) % MOMENTS.length; render(); };
+  }
+
+  function goStep(i){ S.step = i; S.paused = true; render(); }
+
+  // ── Delegated interactions ──────────────────────────────────────────────
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    const act = el.getAttribute('data-act');
+    if (act === 'toggle') { S.paused = !S.paused; render(); }
+    else if (act === 'moment') { goStep(parseInt(el.getAttribute('data-i'), 10)); }
+    else if (act === 'open') { goStep(STEP_MODAL); }
+    else if (act === 'apply') { goStep(STEP_APPLIED); }
+    else if (act === 'close') { goStep(1); }
+  });
+
+  // prefers-reduced-motion: hold on "Update available"
+  try {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const apply = () => { S.reduced = mq.matches; if (mq.matches) { S.paused = true; S.step = 1; render(); } };
+    if (mq.addEventListener) mq.addEventListener('change', apply); else mq.addListener(apply);
+    S.reduced = mq.matches; if (mq.matches) { S.paused = true; S.step = 1; }
+  } catch (e) {}
+
+  render();
+})();
+</script>
+</body>
+</html>
