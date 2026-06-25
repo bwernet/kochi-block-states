@@ -16,8 +16,11 @@ Served via GitHub Pages:
   `https://bwernet.github.io/kochi-block-states/`
 - **Editor + Cowork (conclusion)** — the whole product, resolving a shared-block update:
   `https://bwernet.github.io/kochi-block-states/editor-chrome/`
+- **Design system → agent-built, designer-audited** — an agent reads a component's
+  machine-readable spec to build it, and a designer audits the result against the same source:
+  `https://bwernet.github.io/kochi-block-states/pixel-workbench/`
 
-Each is a single static file (`index.html` / `editor-chrome/index.html`) — no build, no dependencies.
+Each is a single static file (`index.html` / `editor-chrome/index.html` / `pixel-workbench/index.html`) — no build, no dependencies.
 
 ## Embedding (e.g. Framer)
 

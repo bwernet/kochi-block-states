@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Design system → agent-built, designer-audited</title>
+<meta name="description" content="Case study: the design system as a machine-readable source of truth — an AI agent reads a component's spec to build it, and a designer audits the result against the same source." />
+<!--
+  STANDALONE / PORTABLE build of the /demos/pixel-workbench prototype.
+  Single self-contained file — no framework, no build step, no Kochi imports, no
+  external JS. Host anywhere (static host, S3, GitHub Pages) or paste into a
+  Framer HTML embed. Nothing here sets X-Frame-Options, so it embeds cross-origin.
+
+  Faithfulness: the component spec shown (StatusBadge — tier, variants, themeTokens,
+  accessibility line) is the REAL registry entry (getComponent('status-badge')),
+  and the five badges are the real component's variants. Every product colour,
+  icon SVG, and font is extracted from the live Kochi app (dark theme). The
+  surrounding "canvas" (lavender gradient, violet ink) is the case study's own
+  identity. The Pixel Agent narration and audit-checks panel are an idealised
+  depiction of an agent reading the registry / a designer auditing — not shipped
+  agent output or a live audit run.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* Kochi product tokens (dark theme) — extracted from the live app */
+    --bg-primary:#0C111D; --bg-secondary:#161B26; --bg-tertiary:#1F242F;
+    --border-primary:#333741;
+    --text-primary:#F5F5F6; --text-secondary:#CECFD2; --text-tertiary:#94969C;
+    --text-quaternary:#61646C; --fg-quinary:#85888E;
+    --blue-500:#2E90FA; --warning-500:#F79009; --error-500:#EF4444;
+    --success-500:#17B26A; --success-700:#47CD89;
+    --scrim:rgba(12,17,29,0.50);
+
+    /* Case-study canvas identity */
+    --ink:#1d1b2e; --ink-soft:#4a4860; --ink-muted:#8d8aa3;
+    --violet:#6938ef; --violet-ghost:rgba(105,56,239,0.16);
+    --violet-tint:rgba(105,56,239,0.20); --violet-edge:rgba(105,56,239,0.40);
+    --hairline:rgba(29,27,46,0.10); --card-border:rgba(29,27,46,0.07);
+
+    --ui:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+    --mono:'JetBrains Mono','IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; }
+  body { font-family:var(--ui); -webkit-font-smoothing:antialiased; }
+
+  .canvas {
+    position:relative; min-height:100vh; width:100%;
+    background:
+      radial-gradient(120% 80% at 85% 0%, rgba(170,150,235,0.30), transparent 55%),
+      linear-gradient(160deg,#f5f3fb 0%,#ecebf6 55%,#e7e5f1 100%);
+  }
+  .grid {
+    position:absolute; inset:0; pointer-events:none;
+    background-image:
+      linear-gradient(rgba(29,27,46,0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(29,27,46,0.045) 1px, transparent 1px);
+    background-size:44px 44px;
+  }
+  .container {
+    position:relative; margin:0 auto; max-width:1040px;
+    display:flex; flex-direction:column; justify-content:flex-start; gap:28px;
+    padding:40px 24px; min-height:100vh;
+  }
+
+  /* Header */
+  header { display:flex; flex-direction:column; gap:20px; }
+  .head-row { display:flex; align-items:baseline; justify-content:space-between; gap:16px; }
+  h1 { margin:0; font-size:18px; font-weight:600; letter-spacing:-0.01em; color:var(--ink); }
+  .pausebtn {
+    display:inline-flex; align-items:center; gap:6px; border-radius:9999px;
+    background:rgba(255,255,255,0.8); padding:6px 12px; font-size:12px; font-weight:500;
+    color:var(--ink-soft); border:1px solid var(--card-border); cursor:pointer;
+    box-shadow:0 1px 2px rgba(16,24,40,0.05); font-family:var(--ui); white-space:nowrap;
+  }
+  .pausebtn svg { width:14px; height:14px; }
+
+  .track { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .track-item {
+    position:relative; flex:0 0 auto; padding-bottom:6px; font-size:12px; font-weight:500;
+    color:var(--ink-muted); background:none; border:none; cursor:pointer; font-family:var(--ui);
+    white-space:nowrap; transition:color .15s ease;
+  }
+  .track-item.active { color:var(--ink); }
+  .cd { position:absolute; left:0; right:0; bottom:0; height:2px; border-radius:9999px;
+        overflow:hidden; background:var(--violet-ghost); display:none; }
+  .track-item.active .cd { display:block; }
+  .cd-fill { display:block; height:100%; width:100%; border-radius:9999px;
+             background:var(--violet); transform:scaleX(1); transform-origin:left; }
+  .track-conn { height:1px; width:24px; flex:0 0 auto; background:var(--hairline); }
+
+  .desc { display:flex; flex-direction:column; min-height:64px; }
+  .desc p { margin:0; font-size:14px; line-height:1.6; color:var(--ink-soft); }
+
+  /* Frame */
+  .frame {
+    position:relative; overflow:hidden; border-radius:12px;
+    background:var(--bg-primary); border:1px solid var(--card-border);
+    box-shadow:0 24px 60px -28px rgba(29,27,46,0.30), 0 6px 18px -12px rgba(29,27,46,0.18);
+  }
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+    padding:10px 16px; border-bottom:1px solid var(--border-primary);
+  }
+  .topbar-left { display:flex; align-items:center; gap:8px; }
+  .wb-title { font-size:14px; font-weight:500; color:var(--text-secondary); }
+  .wb-sep { color:var(--text-quaternary); }
+  .wb-tab { font-size:14px; color:var(--text-tertiary); }
+
+  .audit-pill {
+    display:inline-flex; align-items:center; gap:6px; border-radius:9999px;
+    padding:4px 10px; font-size:12px; font-weight:500;
+    color:var(--text-tertiary); background:rgba(133,136,142,0.14);
+    border:1px solid rgba(133,136,142,0.30);
+  }
+  .audit-pill .ap-dot { width:6px; height:6px; border-radius:9999px; background:var(--text-tertiary); }
+  .audit-pill.passing { color:var(--success-700); background:rgba(23,178,106,0.15);
+    border-color:rgba(71,205,137,0.30); }
+  .audit-pill.passing .ap-dot { background:var(--success-700); }
+
+  /* Body: three panes */
+  .body-rel { position:relative; }
+  .cols { display:grid; grid-template-columns:260px 1fr 300px; min-height:440px; }
+  .pane { padding:16px; overflow-y:auto; }
+  .pane.spec { border-right:1px solid var(--border-primary); }
+  .pane.agent { border-left:1px solid var(--border-primary); background:var(--bg-secondary);
+                display:flex; flex-direction:column; }
+  .pane.preview { display:flex; flex-direction:column; gap:16px; }
+  .pane-title {
+    font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.06em;
+    color:var(--text-quaternary); margin-bottom:12px;
+  }
+
+  /* Spec pane */
+  .srow { display:flex; flex-direction:column; gap:4px; margin-bottom:16px; }
+  .slabel { font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-quaternary); }
+  .sval { font-size:13px; }
+  .mono { font-family:var(--mono); color:var(--text-secondary); }
+  .mono.strong { color:var(--text-primary); }
+  .vchips { display:flex; flex-wrap:wrap; gap:4px; }
+  .vchip { font-family:var(--mono); font-size:12px; border-radius:4px; padding:2px 6px;
+           background:var(--bg-tertiary); color:var(--text-secondary); }
+  .trows { display:flex; flex-direction:column; gap:4px; }
+  .trow { font-family:var(--mono); font-size:12px; border-radius:4px; padding:2px 6px;
+          background:var(--bg-tertiary); color:var(--text-tertiary);
+          border:1px solid transparent; transition:background-color .2s ease, color .2s ease, border-color .2s ease; }
+  .trow.cited { background:var(--violet-tint); color:var(--text-primary); border-color:var(--violet-edge); }
+  .a11y { font-size:12px; line-height:1.55; color:var(--text-tertiary); }
+
+  /* Preview pane */
+  .render {
+    display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-height:72px;
+    border-radius:12px; padding:16px; background:var(--bg-secondary);
+    border:1px solid var(--border-primary);
+  }
+  .await { font-size:14px; color:var(--text-quaternary); }
+  .badge { display:inline-flex; align-items:center; gap:6px; border-radius:9999px;
+           padding:2px 8px; font-size:12px; font-weight:500; }
+  .badge .bd { width:6px; height:6px; border-radius:9999px; }
+  .gen {
+    margin:0; overflow-x:auto; border-radius:12px; padding:12px;
+    background:var(--bg-primary); border:1px solid var(--border-primary);
+    font-family:var(--mono); font-size:12px; line-height:1.7; color:var(--text-secondary);
+    white-space:pre-wrap;
+  }
+
+  /* Agent rail */
+  .idle { margin:0; font-size:14px; color:var(--text-quaternary); }
+  .bubble { border-radius:12px; padding:12px; background:var(--bg-primary); border:1px solid var(--border-primary); }
+  .bmsg { margin:0; font-size:14px; line-height:1.55; color:var(--text-secondary); }
+  .achips { margin-top:8px; display:flex; flex-direction:column; gap:4px; }
+  .achip { font-family:var(--mono); font-size:12px; border-radius:4px; padding:2px 6px;
+           background:var(--violet-tint); color:var(--text-primary); border:1px solid var(--violet-edge); }
+  .composer { margin-top:auto; padding-top:12px; }
+  .composer-box { border-radius:12px; padding:8px 12px; font-size:14px;
+                  background:var(--bg-primary); border:1px solid var(--border-primary); color:var(--text-quaternary); }
+
+  /* Audit overlay (closing beat) */
+  .audit-scrim {
+    position:absolute; inset:0; z-index:10; display:flex; align-items:center; justify-content:center;
+    padding:20px; background:var(--scrim);
+  }
+  .audit-card {
+    width:100%; max-width:360px; border-radius:12px; padding:20px;
+    background:var(--bg-secondary); border:1px solid var(--border-primary);
+    box-shadow:0 20px 25px -5px rgba(0,0,0,0.3);
+  }
+  .audit-head { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+  .audit-badge {
+    display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px;
+    border-radius:9999px; background:rgba(23,178,106,0.20); color:var(--success-700);
+  }
+  .audit-badge svg { width:12px; height:12px; }
+  .audit-h { font-size:14px; font-weight:500; color:var(--text-primary); }
+  .audit-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:12px; }
+  .acheck { display:flex; align-items:flex-start; gap:8px; }
+  .acheck .cicon { flex:0 0 auto; margin-top:2px; color:var(--success-700); display:inline-flex; }
+  .acheck .cicon svg { width:16px; height:16px; }
+  .ctext { display:flex; flex-direction:column; }
+  .ct { font-size:14px; color:var(--text-primary); }
+  .cd2 { font-size:12px; color:var(--text-tertiary); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .track-item, .trow { transition:none; }
+  }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="grid" aria-hidden="true"></div>
+    <div class="container">
+      <header>
+        <div class="head-row">
+          <h1>Design system → agent-built, designer-audited</h1>
+          <button class="pausebtn" id="toggle" aria-pressed="false"></button>
+        </div>
+        <nav class="track" id="track" aria-label="Case study beats"></nav>
+        <div class="desc"><p id="desc"></p></div>
+      </header>
+
+      <div class="frame">
+        <div class="topbar">
+          <div class="topbar-left">
+            <span class="wb-title">Pixel Workbench</span>
+            <span class="wb-sep">·</span>
+            <span class="wb-tab">Components</span>
+          </div>
+          <span id="pill"></span>
+        </div>
+        <div class="body-rel" id="bodyRel"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  function rgba(hex, a){
+    var n = parseInt(hex.slice(1), 16);
+    return 'rgba(' + ((n>>16)&255) + ', ' + ((n>>8)&255) + ', ' + (n&255) + ', ' + a + ')';
+  }
+  function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // ── Icons (extracted from @untitledui/icons) ───────────────────────────────
+  var ICON = {
+    check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+    play:'<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10Z"/><path d="M9.5 8.965c0-.477 0-.716.1-.849a.5.5 0 0 1 .364-.199c.166-.012.367.117.769.375l4.72 3.035c.349.224.523.336.583.478a.5.5 0 0 1 0 .39c-.06.142-.234.254-.583.478l-4.72 3.035c-.402.258-.603.387-.769.375a.5.5 0 0 1-.364-.2c-.1-.132-.1-.371-.1-.848v-6.07Z"/></svg>',
+    pause:'<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 15V9m5 6V9m7.5 3c0 5.523-4.477 10-10 10S2 17.523 2 12 6.477 2 12 2s10 4.477 10 10Z"/></svg>'
+  };
+
+  // ── Beat model ─────────────────────────────────────────────────────────────
+  var BEATS = ['spec','reads','builds','audit'];
+  var HOLD = { spec:5200, reads:7000, builds:7500, audit:8500 };
+
+  var CAP = {
+    spec:   { label:'The spec',
+      behavior:'Every component lives in code as a spec — its tier, tokens, states, and intent. Not a Figma file. This is the source of truth.' },
+    reads:  { label:'The agent reads it',
+      behavior:'An AI agent reads the same spec — pulling the exact token names by reference, never guessing a hex value.' },
+    builds: { label:'The agent builds',
+      behavior:'It emits token-based code — semantic tokens, zero hardcoded color — and the real component renders from it.' },
+    audit:  { label:'The designer audits',
+      behavior:'A designer audits the output against the same source: tokens match, nothing is hardcoded, status never relies on color alone. Quality holds.' }
+  };
+
+  // ── Real registry data — getComponent('status-badge') ──────────────────────
+  var VARIANTS = [
+    { key:'success', label:'Success', color:'#17B26A' },
+    { key:'warning', label:'Warning', color:'#F79009' },
+    { key:'error',   label:'Error',   color:'#EF4444' },
+    { key:'info',    label:'Info',    color:'#2E90FA' },
+    { key:'neutral', label:'Neutral', color:'#94969C' }
+  ];
+  var TOKENS = ['colors.success700','colors.utilityError500','colors.warning500','colors.blue500'];
+  var A11Y = 'Color alone does not convey status — text label is always present';
+
+  // Illustrative sample output (clearly code, not UI chrome) using the spec's real token names.
+  var GEN =
+    '// generated from spec: status-badge\n' +
+    "{(['success','warning','error','info','neutral'] as const).map((v) => (\n" +
+    '  <StatusBadge key={v} status={v} showDot />\n' +
+    '))}\n' +
+    '// colors resolve via tokens — never a raw hex:\n' +
+    '// success → colors.success700   error → colors.utilityError500\n' +
+    '// warning → colors.warning500   info  → colors.blue500';
+
+  // Scripted Pixel Agent narration — idealised depiction, not shipped output.
+  var AGENT = {
+    spec:   { role:'idle',  text:'Ask Pixel to build a component from the registry.' },
+    reads:  { role:'agent', text:'Reading the status-badge spec — tier cva, variant pill, rounded-full. Pulling its tokens by name:', chips:true },
+    builds: { role:'agent', text:'Emitting token-based JSX — semantic tokens only, no raw hex. Rendering the real component to confirm.' },
+    audit:  { role:'agent', text:'Done. Output references only the spec’s tokens — handing off for audit.' }
+  };
+
+  // Audit checks — phrased from the real /design-system audit rules (faithful recreation).
+  var AUDIT = [
+    { label:'Tokens match the registry', detail:'All 4 themeTokens referenced: ' + TOKENS.join(', ') },
+    { label:'Zero hardcoded colors',     detail:'Output uses semantic tokens only — no raw hex values' },
+    { label:'Accessibility upheld',      detail:A11Y }
+  ];
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  var index = 0, paused = false, reducedMotion = false, anim = null;
+
+  var elId = function(id){ return document.getElementById(id); };
+  var track = elId('track'), desc = elId('desc'), bodyRel = elId('bodyRel'),
+      pill = elId('pill'), toggle = elId('toggle');
+
+  // ── Build the (static) beat track ──────────────────────────────────────────
+  BEATS.forEach(function(b, i){
+    var btn = document.createElement('button');
+    btn.className = 'track-item';
+    btn.type = 'button';
+    btn.setAttribute('data-beat', b);
+    btn.innerHTML = esc(CAP[b].label) + '<span class="cd"><span class="cd-fill"></span></span>';
+    btn.addEventListener('click', function(){ selectBeat(b); });
+    track.appendChild(btn);
+    if (i < BEATS.length - 1) {
+      var c = document.createElement('span');
+      c.className = 'track-conn';
+      track.appendChild(c);
+    }
+  });
+
+  // ── HTML builders ──────────────────────────────────────────────────────────
+  function row(label, val){
+    return '<div class="srow"><span class="slabel">' + label + '</span><div class="sval">' + val + '</div></div>';
+  }
+
+  function specPane(cited){
+    var vchips = VARIANTS.map(function(v){ return '<code class="vchip">' + v.key + '</code>'; }).join('');
+    var trows = TOKENS.map(function(t){ return '<code class="trow' + (cited ? ' cited' : '') + '">' + t + '</code>'; }).join('');
+    return '<div class="pane spec">' +
+      '<div class="pane-title">Spec · status-badge</div>' +
+      row('name', '<code class="mono strong">StatusBadge</code>') +
+      row('tier', '<code class="mono">cva</code>') +
+      row('variants', '<span class="vchips">' + vchips + '</span>') +
+      row('themeTokens', '<span class="trows">' + trows + '</span>') +
+      row('accessibility', '<span class="a11y">' + esc(A11Y) + '</span>') +
+      '</div>';
+  }
+
+  function badge(v){
+    return '<span class="badge" style="color:' + v.color + ';background:' + rgba(v.color, 0.15) +
+      ';border:1px solid ' + rgba(v.color, 0.30) + '"><span class="bd" style="background:' + v.color + '"></span>' +
+      v.label + '</span>';
+  }
+
+  function previewPane(built){
+    var render = built
+      ? VARIANTS.map(badge).join('')
+      : '<span class="await">Awaiting build…</span>';
+    var gen = built ? '<pre class="gen">' + esc(GEN) + '</pre>' : '';
+    return '<div class="pane preview">' +
+      '<div class="pane-title">Preview</div>' +
+      '<div class="render">' + render + '</div>' +
+      gen +
+      '</div>';
+  }
+
+  function agentRail(beat){
+    var line = AGENT[beat];
+    var body;
+    if (line.role === 'idle') {
+      body = '<p class="idle">' + esc(line.text) + '</p>';
+    } else {
+      var chips = line.chips
+        ? '<div class="achips">' + TOKENS.map(function(t){ return '<code class="achip">' + t + '</code>'; }).join('') + '</div>'
+        : '';
+      body = '<div class="bubble"><p class="bmsg">' + esc(line.text) + '</p>' + chips + '</div>';
+    }
+    return '<div class="pane agent">' +
+      '<div class="pane-title">Pixel Agent</div>' +
+      body +
+      '<div class="composer"><div class="composer-box">Ask Pixel…</div></div>' +
+      '</div>';
+  }
+
+  function auditOverlay(){
+    var checks = AUDIT.map(function(c){
+      return '<li class="acheck"><span class="cicon">' + ICON.check + '</span>' +
+        '<span class="ctext"><span class="ct">' + esc(c.label) + '</span>' +
+        '<span class="cd2">' + esc(c.detail) + '</span></span></li>';
+    }).join('');
+    return '<div class="audit-scrim">' +
+      '<div class="audit-card">' +
+        '<div class="audit-head"><span class="audit-badge">' + ICON.check + '</span>' +
+          '<span class="audit-h">Audited against status-badge</span></div>' +
+        '<ul class="audit-list">' + checks + '</ul>' +
+      '</div></div>';
+  }
+
+  function auditPill(isAudit){
+    return '<span class="audit-pill' + (isAudit ? ' passing' : '') + '">' +
+      '<span class="ap-dot"></span>' + (isAudit ? 'Audit passing' : 'Audit') + '</span>';
+  }
+
+  // ── Render the frame for a given beat ──────────────────────────────────────
+  function renderFrame(beat){
+    var cited = beat !== 'spec';
+    var built = beat === 'builds' || beat === 'audit';
+    var isAudit = beat === 'audit';
+
+    pill.innerHTML = auditPill(isAudit);
+    bodyRel.innerHTML =
+      '<div class="cols">' + specPane(cited) + previewPane(built) + agentRail(beat) + '</div>' +
+      (isAudit ? auditOverlay() : '');
+  }
+
+  // ── Countdown underline (drives the advance) ───────────────────────────────
+  function startCountdown(beat){
+    if (anim) { anim.onfinish = null; anim.cancel(); anim = null; }
+    var fill = track.querySelector('.track-item.active .cd-fill');
+    if (!fill) return;
+    if (paused) return; // hold full
+    anim = fill.animate(
+      [{ transform:'scaleX(0)' }, { transform:'scaleX(1)' }],
+      { duration: HOLD[beat], easing:'linear', fill:'forwards' }
+    );
+    anim.onfinish = function(){ index = (index + 1) % BEATS.length; render(); };
+  }
+
+  // ── Master render ──────────────────────────────────────────────────────────
+  function render(){
+    var beat = BEATS[index];
+    [].forEach.call(track.querySelectorAll('.track-item'), function(b){
+      var on = b.getAttribute('data-beat') === beat;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-current', on ? 'step' : 'false');
+    });
+    desc.textContent = CAP[beat].behavior;
+    renderFrame(beat);
+    toggle.innerHTML = (paused ? ICON.play : ICON.pause) + (paused ? 'Play' : 'Pause');
+    toggle.setAttribute('aria-pressed', paused ? 'true' : 'false');
+    toggle.setAttribute('aria-label', paused ? 'Resume auto-cycling' : 'Pause auto-cycling');
+    startCountdown(beat);
+  }
+
+  function selectBeat(b){ index = BEATS.indexOf(b); paused = true; render(); }
+
+  toggle.addEventListener('click', function(){ paused = !paused; render(); });
+
+  // prefers-reduced-motion: hold statically on the closing audit beat
+  try {
+    var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    var applyMq = function(){
+      reducedMotion = mq.matches;
+      if (mq.matches) { paused = true; index = BEATS.indexOf('audit'); render(); }
+    };
+    if (mq.addEventListener) mq.addEventListener('change', applyMq); else mq.addListener(applyMq);
+    reducedMotion = mq.matches;
+    if (mq.matches) { paused = true; index = BEATS.indexOf('audit'); }
+  } catch (e) { /* no-op */ }
+
+  render();
+})();
+</script>
+</body>
+</html>
